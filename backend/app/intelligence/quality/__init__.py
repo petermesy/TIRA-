@@ -1,0 +1,1 @@
+"""Deterministic draft quality checks."""

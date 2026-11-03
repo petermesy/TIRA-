@@ -1,0 +1,1 @@
+"""Manual article input adapters."""
