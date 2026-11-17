@@ -129,7 +129,11 @@ class AnalyzerService:
                 "Distinguish source quality from verified truth. Score each dimension from 0 to",
                 "10 and provide a rationale for every dimension. Cite exact article excerpts or",
                 "the supplied source URL as evidence references; use an empty list when none",
-                "exists. Do not invent details.",
+                "exists. Do not invent details. For SCIENCE, create an engaging, plain-language",
+                "explainer for general readers. Keep every claim and number grounded in the",
+                "supplied content, label estimates as estimates, and retain important caveats.",
+                "Avoid clickbait and never imply a scientific effect is larger or more certain",
+                "than the source supports.",
             ]
         )
         user_payload = {
@@ -153,7 +157,7 @@ class AnalyzerService:
         user_content = json.dumps(user_payload, ensure_ascii=False)
         if self.settings.llm_provider == "google_gemini":
             request_url = (
-                f"{self.settings.llm_base_url}/models/"
+                f"{self.settings.llm_api_base_url}/models/"
                 f"{quote(self.settings.llm_model, safe='')}:generateContent"
             )
             headers = {"x-goog-api-key": self.settings.llm_api_key.get_secret_value()}
@@ -166,7 +170,7 @@ class AnalyzerService:
                 },
             }
         else:
-            request_url = f"{self.settings.llm_base_url}/chat/completions"
+            request_url = f"{self.settings.llm_api_base_url}/chat/completions"
             headers = {"Authorization": f"Bearer {self.settings.llm_api_key.get_secret_value()}"}
             payload = {
                 "model": self.settings.llm_model,
@@ -214,9 +218,22 @@ class AnalyzerService:
                 raise AnalysisInvalidResponse("LLM returned an empty analysis")
             output = AnalysisOutput.model_validate_json(content)
         except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise AnalysisUnavailable(
-                f"LLM request failed ({type(exc).__name__}); deterministic fallback used"
-            ) from exc
+            diagnostic = f"LLM request failed ({type(exc).__name__})"
+            if isinstance(exc, httpx.HTTPStatusError):
+                diagnostic += f", HTTP {exc.response.status_code}"
+                try:
+                    error = exc.response.json().get("error")
+                except (ValueError, AttributeError):
+                    error = None
+                if isinstance(error, dict) and isinstance(error.get("message"), str):
+                    message = error["message"][:300]
+                    if self.settings.llm_api_key:
+                        message = message.replace(
+                            self.settings.llm_api_key.get_secret_value(),
+                            "[REDACTED]",
+                        )
+                    diagnostic += f": {message}"
+            raise AnalysisUnavailable(f"{diagnostic}; deterministic fallback used") from exc
         except ValidationError as exc:
             raise AnalysisInvalidResponse(
                 "LLM returned malformed or out-of-range analysis"

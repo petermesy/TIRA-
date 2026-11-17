@@ -30,6 +30,7 @@ def client_and_factory() -> tuple[TestClient, sessionmaker]:
         telegram_bot_token=SecretStr("test-telegram-token"),
         telegram_channel_id="@tira-test",
         telegram_review_chat_id="review-chat",
+        telegram_retry_base_seconds=0,
     )
     application = create_app(settings, engine)
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)

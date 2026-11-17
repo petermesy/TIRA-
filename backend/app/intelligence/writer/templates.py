@@ -36,12 +36,14 @@ def build_draft(
         )
         return body, "ai"
     if category == Category.SCIENCE:
+        impact_section = f"Why it matters:\n{why_it_matters}\n\n" if why_it_matters else ""
         body = (
-            "🔬 RESEARCH EXPLAINED\n\n"
+            "🔬 SCIENCE FACT\n\n"
             f"{headline}\n\n"
-            f"Key finding:\n{summary}\n\n"
-            f"Source: {source_line}\n"
-            "#Research #Science"
+            f"The science:\n{summary}\n\n"
+            f"{impact_section}"
+            f"Source: {source_line}\n\n"
+            "#ScienceFacts #Physics #Space"
         )
         return body, "research"
     if category == Category.EMERGING_TECH:

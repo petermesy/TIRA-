@@ -1,6 +1,8 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.schemas import (
     AnalysisResponse,
@@ -11,7 +13,14 @@ from app.api.schemas import (
     ScoreBreakdown,
 )
 from app.core.config import Settings
-from app.database.models import Analysis, Article, Draft
+from app.core.security import require_admin
+from app.database.models import (
+    Analysis,
+    Article,
+    Draft,
+    VerificationRun,
+    VerifiedClaim,
+)
 from app.database.session import get_db
 from app.intelligence.analyzer.service import AnalysisInvalidResponse
 from app.services.article_service import (
@@ -20,6 +29,8 @@ from app.services.article_service import (
     article_response,
 )
 from app.sources.manual.url_reader import ArticleExtractionError
+from app.verification.schemas import VerificationResponse
+from app.verification.service import VerificationService
 
 router = APIRouter(prefix="/api/v1", tags=["articles"])
 
@@ -137,3 +148,49 @@ def get_current_draft(article_id: str, db: Session = Depends(get_db)) -> DraftRe
     if draft is None:
         raise HTTPException(status_code=404, detail="Draft not found")
     return DraftResponse.model_validate(draft)
+
+
+@router.post("/articles/{article_id}/verify", response_model=VerificationResponse)
+async def verify_article(
+    article_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> VerificationResponse:
+    article = db.get(Article, article_id)
+    if article is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    try:
+        settings = _settings(request)
+        async with asyncio.timeout(settings.max_verification_duration_seconds):
+            verification = await VerificationService(settings, db).verify(article)
+    except TimeoutError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=504,
+            detail="Article verification exceeded its time limit",
+        ) from exc
+    except AnalysisInvalidResponse as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return VerificationResponse.model_validate(verification)
+
+
+@router.get(
+    "/articles/{article_id}/verification",
+    response_model=VerificationResponse | None,
+)
+def get_article_verification(
+    article_id: str,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> VerificationResponse | None:
+    if db.get(Article, article_id) is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    verification = db.scalar(
+        select(VerificationRun)
+        .options(selectinload(VerificationRun.claims).selectinload(VerifiedClaim.evidence))
+        .where(VerificationRun.article_id == article_id)
+        .order_by(VerificationRun.version.desc())
+        .limit(1)
+    )
+    return VerificationResponse.model_validate(verification) if verification else None

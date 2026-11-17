@@ -1,12 +1,13 @@
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.database.models import Analysis, CollectionRun, Source
+from app.database.models import Analysis, Article, CollectionRun, Source
 from app.intelligence.normalizer import classify_category
 from app.services.article_service import DuplicateArticleError, analyze_and_persist
 from app.sources.connectors.arxiv import ArxivConnector
@@ -92,6 +93,7 @@ async def execute_collection(
     settings: Settings,
     *,
     trigger_type: str = "MANUAL",
+    on_article_created: Callable[[Article], Awaitable[None]] | None = None,
 ) -> CollectionRun:
     started_clock = time.monotonic()
     started_at = datetime.now(UTC)
@@ -236,6 +238,8 @@ async def execute_collection(
                     run.items_analyzed += 1
                     metrics["items_new"] += 1
                     remaining_items -= 1
+                    if on_article_created is not None:
+                        await on_article_created(article)
 
             for warning in batch.warnings:
                 _record_error(

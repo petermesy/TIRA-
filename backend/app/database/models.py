@@ -51,6 +51,9 @@ class Article(Base):
     drafts: Mapped[list["Draft"]] = relationship(
         back_populates="article", cascade="all, delete-orphan"
     )
+    verification_runs: Mapped[list["VerificationRun"]] = relationship(
+        back_populates="article", cascade="all, delete-orphan"
+    )
 
 
 class Source(Base):
@@ -96,6 +99,128 @@ class CollectionRun(Base):
     errors: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     source_metrics: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class OperationsControl(Base):
+    __tablename__ = "operations_control"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default="global")
+    publishing_paused: Mapped[bool] = mapped_column(default=False, nullable=False)
+    collection_paused: Mapped[bool] = mapped_column(default=False, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str] = mapped_column(String(100), nullable=False, default="system")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class TelegramCallback(Base):
+    __tablename__ = "telegram_callbacks"
+
+    callback_query_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    reviewer_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    draft_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class SourceCredibility(Base):
+    __tablename__ = "source_credibility"
+
+    domain: Mapped[str] = mapped_column(String(255), primary_key=True)
+    tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class VerificationRun(Base):
+    __tablename__ = "verification_runs"
+    __table_args__ = (
+        UniqueConstraint("article_id", "version", name="uq_verification_article_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    article_id: Mapped[str] = mapped_column(
+        ForeignKey("articles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    verification_score: Mapped[float] = mapped_column(Float(precision=53), nullable=False)
+    importance_score: Mapped[float] = mapped_column(Float(precision=53), nullable=False)
+    importance_inputs: Mapped[dict[str, float]] = mapped_column(JSON, nullable=False)
+    importance_weights: Mapped[dict[str, float]] = mapped_column(JSON, nullable=False)
+    importance_policy_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    score_factors: Mapped[dict[str, float]] = mapped_column(JSON, nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    cve_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    article: Mapped[Article] = relationship(back_populates="verification_runs")
+    claims: Mapped[list["VerifiedClaim"]] = relationship(
+        back_populates="verification_run", cascade="all, delete-orphan"
+    )
+
+
+class VerifiedClaim(Base):
+    __tablename__ = "verified_claims"
+    __table_args__ = (
+        UniqueConstraint("verification_run_id", "claim_key", name="uq_claim_run_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    verification_run_id: Mapped[str] = mapped_column(
+        ForeignKey("verification_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    claim_key: Mapped[str] = mapped_column(String(16), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_material: Mapped[bool] = mapped_column(default=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    verification_score: Mapped[float] = mapped_column(Float(precision=53), nullable=False)
+    score_factors: Mapped[dict[str, float]] = mapped_column(JSON, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    search_queries: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    verification_run: Mapped[VerificationRun] = relationship(back_populates="claims")
+    evidence: Mapped[list["ClaimEvidence"]] = relationship(
+        back_populates="claim", cascade="all, delete-orphan"
+    )
+
+
+class ClaimEvidence(Base):
+    __tablename__ = "claim_evidence"
+    __table_args__ = (UniqueConstraint("claim_id", "url", name="uq_evidence_claim_url"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    claim_id: Mapped[str] = mapped_column(
+        ForeignKey("verified_claims.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    publisher: Mapped[str] = mapped_column(String(255), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    excerpt: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    stance: Mapped[str] = mapped_column(String(16), nullable=False)
+    is_materially_misleading: Mapped[bool] = mapped_column(default=False, nullable=False)
+    validated_cve_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    independence_group: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    claim: Mapped[VerifiedClaim] = relationship(back_populates="evidence")
 
 
 class Analysis(Base):
@@ -182,6 +307,10 @@ class PublishedPost(Base):
     message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     delivery_status: Mapped[str] = mapped_column(String(32), nullable=False)
     error_class: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    retryable: Mapped[bool] = mapped_column(default=False, nullable=False)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    response_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
@@ -191,6 +320,23 @@ class PublishedPost(Base):
     )
 
     draft: Mapped[Draft] = relationship(back_populates="published_post")
+
+
+class PostCorrection(Base):
+    __tablename__ = "post_corrections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    original_post_id: Mapped[str] = mapped_column(
+        ForeignKey("published_posts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    correction_draft_id: Mapped[str] = mapped_column(
+        ForeignKey("drafts.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
 
 
 class AuditEvent(Base):

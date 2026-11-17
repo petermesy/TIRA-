@@ -14,8 +14,10 @@ from app.api.collection_schemas import (
 from app.collection.service import collection_run_response, execute_collection
 from app.core.config import Settings
 from app.core.security import require_admin, validate_public_url
-from app.database.models import CollectionRun, Source
+from app.database.models import CollectionRun, Source, SourceCredibility
 from app.database.session import get_db
+from app.services.operations import get_operations_control
+from app.verification.schemas import CredibilityResponse, CredibilityUpdateRequest
 
 router = APIRouter(prefix="/api/v1", tags=["collection"])
 ALLOWED_CATEGORIES = {"AI", "CYBERSECURITY", "SOFTWARE", "EMERGING_TECH", "SCIENCE"}
@@ -42,6 +44,58 @@ def _source_response(source: Source) -> SourceResponse:
         consecutive_failures=source.consecutive_failures,
         last_error=source.last_error,
     )
+
+
+def _normalized_domain(domain: str) -> str:
+    try:
+        parsed = urlsplit(f"https://{domain.strip().rstrip('.')}")
+        if (
+            parsed.hostname is None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.port is not None
+            or parsed.username is not None
+        ):
+            raise ValueError
+        return parsed.hostname.encode("idna").decode("ascii").casefold()
+    except (UnicodeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="A valid hostname is required") from exc
+
+
+@router.get("/sources/credibility", response_model=list[CredibilityResponse])
+def list_source_credibility(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> list[CredibilityResponse]:
+    records = db.scalars(select(SourceCredibility).order_by(SourceCredibility.domain)).all()
+    return [CredibilityResponse.model_validate(record) for record in records]
+
+
+@router.put("/sources/credibility/{domain}", response_model=CredibilityResponse)
+def set_source_credibility(
+    domain: str,
+    payload: CredibilityUpdateRequest,
+    db: Session = Depends(get_db),
+    reviewer_id: str = Depends(require_admin),
+) -> CredibilityResponse:
+    normalized_domain = _normalized_domain(domain)
+    record = db.get(SourceCredibility, normalized_domain)
+    if record is None:
+        record = SourceCredibility(
+            domain=normalized_domain,
+            tier=payload.tier,
+            rationale=payload.rationale.strip(),
+            updated_by=reviewer_id,
+        )
+        db.add(record)
+    else:
+        record.tier = payload.tier
+        record.rationale = payload.rationale.strip()
+        record.updated_by = reviewer_id
+    db.commit()
+    db.refresh(record)
+    return CredibilityResponse.model_validate(record)
 
 
 @router.post("/sources", response_model=SourceResponse, status_code=status.HTTP_201_CREATED)
@@ -142,6 +196,9 @@ async def run_collection(
     del reviewer_id
     if trigger_type not in {"MANUAL", "SCHEDULED"}:
         raise HTTPException(status_code=422, detail="trigger_type must be MANUAL or SCHEDULED")
+    control = get_operations_control(db)
+    if control.collection_paused:
+        raise HTTPException(status_code=423, detail="Collection is paused by an administrator")
     collection_lock = request.app.state.collection_lock
     if collection_lock.locked():
         raise HTTPException(status_code=409, detail="A collection run is already in progress")

@@ -126,6 +126,7 @@ class DeliveryResponse(BaseModel):
     delivery_status: str
     channel_id: str
     message_id: str | None = None
+    retry_after_seconds: int | None = None
 
 
 class HealthResponse(BaseModel):

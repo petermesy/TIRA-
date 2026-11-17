@@ -130,6 +130,74 @@ def test_gemini_provider_uses_generate_content_contract() -> None:
     assert result.model_name == "gemini-3.5-flash"
 
 
+def test_groq_provider_uses_openai_compatible_contract_and_default_url() -> None:
+    settings = Settings(
+        _env_file=None,
+        llm_provider="groq",
+        llm_api_key=SecretStr("test-groq-key"),
+        llm_model="openai/gpt-oss-20b",
+    )
+    response_payload = {"choices": [{"message": {"content": json.dumps(_llm_output())}}]}
+    with respx.mock:
+        route = respx.post("https://api.groq.com/openai/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=response_payload)
+        )
+        result = asyncio.run(
+            AnalyzerService(settings).analyze(
+                title="A research release",
+                text="The research team published a model.",
+                url=None,
+                category_hint=None,
+            )
+        )
+
+    request = route.calls[0].request
+    body = json.loads(request.content)
+    assert request.headers["authorization"] == "Bearer test-groq-key"
+    assert body["model"] == "openai/gpt-oss-20b"
+    assert body["response_format"] == {"type": "json_object"}
+    assert result.provider == "groq"
+    assert result.model_name == "openai/gpt-oss-20b"
+
+
+def test_gemini_http_failure_reports_status_and_redacts_api_key() -> None:
+    settings = Settings(
+        _env_file=None,
+        llm_provider="google_gemini",
+        llm_api_key=SecretStr("test-secret-key"),
+        llm_model="gemini-3.5-flash",
+    )
+    with respx.mock:
+        respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-3.5-flash:generateContent"
+        ).mock(
+            return_value=httpx.Response(
+                429,
+                json={
+                    "error": {
+                        "message": "Quota exceeded; diagnostic token test-secret-key",
+                    }
+                },
+            )
+        )
+        result = asyncio.run(
+            AnalyzerService(settings).analyze(
+                title="A research release",
+                text="The research team published a model.",
+                url=None,
+                category_hint=None,
+            )
+        )
+
+    assert result.provider == "deterministic"
+    assert result.warnings == [
+        "LLM request failed (HTTPStatusError), HTTP 429: "
+        "Quota exceeded; diagnostic token [REDACTED]; deterministic fallback used"
+    ]
+    assert "test-secret-key" not in result.warnings[0]
+
+
 def test_url_reader_extracts_only_bounded_public_html(monkeypatch: pytest.MonkeyPatch) -> None:
     async def allow_test_host(url: str) -> str:
         return url
