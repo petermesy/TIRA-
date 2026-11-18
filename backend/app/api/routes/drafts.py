@@ -27,7 +27,11 @@ from app.database.models import (
 from app.database.session import get_db
 from app.intelligence.quality.checks import check_draft
 from app.services.operations import get_operations_control, published_today_count
-from app.telegram.client import TelegramClient, TelegramDeliveryError
+from app.telegram.client import (
+    PHOTO_CAPTION_MAX_LENGTH,
+    TelegramClient,
+    TelegramDeliveryError,
+)
 
 router = APIRouter(prefix="/api/v1/drafts", tags=["drafts"])
 
@@ -151,6 +155,8 @@ async def preview_draft(
         f"Headline: {article.title}",
         f"Draft:\n{draft.body}",
     ]
+    if article.image_url:
+        card_lines.append(f"Featured image: {article.image_url}")
     if evidence_urls:
         card_lines.append("Evidence:\n" + "\n".join(evidence_urls))
     elif verification:
@@ -584,10 +590,37 @@ async def publish_draft(
         db.refresh(delivery)
 
         try:
-            message_id = await TelegramClient(settings).send_message(
-                settings.telegram_channel_id,
-                draft.body,
-            )
+            telegram = TelegramClient(settings)
+            if article.image_url and not is_correction:
+                if len(draft.body) <= PHOTO_CAPTION_MAX_LENGTH:
+                    message_id = await telegram.send_photo(
+                        settings.telegram_channel_id,
+                        article.image_url,
+                        caption=draft.body,
+                    )
+                else:
+                    image_message_id = delivery.response_metadata.get("image_message_id")
+                    if image_message_id is None:
+                        image_message_id = await telegram.send_photo(
+                            settings.telegram_channel_id,
+                            article.image_url,
+                        )
+                        delivery.response_metadata = {
+                            **delivery.response_metadata,
+                            "image_message_id": image_message_id,
+                        }
+                        db.commit()
+                    message_id = await telegram.send_message(
+                        settings.telegram_channel_id,
+                        draft.body,
+                        reply_to_message_id=int(image_message_id),
+                        disable_web_page_preview=True,
+                    )
+            else:
+                message_id = await telegram.send_message(
+                    settings.telegram_channel_id,
+                    draft.body,
+                )
         except TelegramDeliveryError as exc:
             delivery.delivery_status = "FAILED"
             delivery.error_class = exc.error_class

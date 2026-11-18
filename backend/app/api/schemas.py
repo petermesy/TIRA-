@@ -94,6 +94,7 @@ class ArticleResponse(BaseModel):
     source_domain: str | None
     author: str | None
     published_at: datetime | None
+    image_url: str | None
     discovered_at: datetime
     category: Category
     language: str

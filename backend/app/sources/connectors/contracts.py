@@ -13,6 +13,7 @@ class ArticleCandidate(BaseModel):
     source_domain: str = Field(min_length=1, max_length=255)
     published_at: datetime | None = None
     author: str | None = Field(default=None, max_length=255)
+    image_url: HttpUrl | None = None
     content_excerpt: str = Field(default="", max_length=100_000)
     language: str = Field(default="en", min_length=2, max_length=16)
     retrieval_method: str

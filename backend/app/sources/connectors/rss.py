@@ -1,7 +1,7 @@
 import re
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 from xml.etree.ElementTree import Element, ParseError
 
 from bs4 import BeautifulSoup
@@ -9,7 +9,7 @@ from defusedxml.common import DefusedXmlException
 from defusedxml.ElementTree import fromstring
 
 from app.core.config import Settings
-from app.core.security import canonicalize_url
+from app.core.security import canonicalize_url, validate_public_url
 from app.database.models import Source
 from app.sources.connectors.contracts import (
     ArticleCandidate,
@@ -21,6 +21,7 @@ from app.sources.connectors.http import safe_get
 CONTENT_NS = "{http://purl.org/rss/1.0/modules/content/}encoded"
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
 DC_NS = "{http://purl.org/dc/elements/1.1/}"
+MEDIA_NS = "{http://search.yahoo.com/mrss/}"
 
 
 def _child_text(element: Element, *names: str) -> str:
@@ -48,6 +49,28 @@ def _plain_text(value: str) -> str:
     return re.sub(
         r"\s+", " ", BeautifulSoup(value, "html.parser").get_text(" ", strip=True)
     ).strip()
+
+
+def _image_url(entry: Element) -> str | None:
+    enclosure = entry.find("enclosure")
+    if enclosure is not None and (enclosure.get("type") or "").lower().startswith("image/"):
+        return enclosure.get("url")
+
+    media_content = entry.find(f"{MEDIA_NS}content")
+    if media_content is not None and (
+        media_content.get("medium") == "image"
+        or (media_content.get("type") or "").lower().startswith("image/")
+    ):
+        return media_content.get("url")
+
+    thumbnail = entry.find(f"{MEDIA_NS}thumbnail")
+    if thumbnail is not None:
+        return thumbnail.get("url")
+
+    atom_link = entry.find(f"{ATOM_NS}link[@rel='enclosure']")
+    if atom_link is not None and (atom_link.get("type") or "").lower().startswith("image/"):
+        return atom_link.get("href")
+    return None
 
 
 class RSSConnector:
@@ -119,6 +142,16 @@ class RSSConnector:
             author = _child_text(entry, "author", f"{DC_NS}creator")
             if not author:
                 author = _child_text(entry, f"{ATOM_NS}author/{ATOM_NS}name")
+            image_url = _image_url(entry)
+            if image_url:
+                try:
+                    image_url = await validate_public_url(urljoin(canonical_url, image_url))
+                except ValueError:
+                    warnings.append("Ignored an unsafe image URL from an RSS item")
+                    image_url = None
+                if image_url and urlsplit(image_url).scheme != "https":
+                    warnings.append("Ignored a non-HTTPS image URL from an RSS item")
+                    image_url = None
             try:
                 items.append(
                     ArticleCandidate(
@@ -128,6 +161,7 @@ class RSSConnector:
                         source_domain=urlsplit(canonical_url).hostname or source.domain or "",
                         published_at=published,
                         author=author[:255] if author else None,
+                        image_url=image_url,
                         content_excerpt=_plain_text(excerpt)[: self.settings.max_article_chars],
                         language="en",
                         retrieval_method="RSS",

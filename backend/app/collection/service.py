@@ -203,6 +203,7 @@ async def execute_collection(
                             source_name=candidate.source_name,
                             published_at=candidate.published_at,
                             author=candidate.author,
+                            image_url=str(candidate.image_url) if candidate.image_url else None,
                             retrieval_method=candidate.retrieval_method,
                             registered_source_id=source.id,
                         ),

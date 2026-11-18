@@ -125,7 +125,13 @@ def test_gemini_provider_uses_generate_content_contract() -> None:
     body = json.loads(request.content)
     assert request.headers["x-goog-api-key"] == "test-key"
     assert body["generationConfig"]["responseMimeType"] == "application/json"
-    assert body["systemInstruction"]["parts"][0]["text"]
+    prompt = body["systemInstruction"]["parts"][0]["text"].lower()
+    assert "summarize the full substantive article" in prompt
+    assert "write the summary directly to the reader" in prompt
+    assert "did you know" in prompt
+    assert "not about the article" in prompt
+    assert "webpage metadata" in prompt
+    assert "navigation" in prompt
     assert result.provider == "google_gemini"
     assert result.model_name == "gemini-3.5-flash"
 
@@ -206,8 +212,12 @@ def test_url_reader_extracts_only_bounded_public_html(monkeypatch: pytest.Monkey
     settings = Settings(_env_file=None, max_fetch_bytes=10_000)
     html = (
         "<html><head><title>Research note</title>"
+        '<meta property="og:image" content="/images/research.jpg">'
         '<meta name="author" content="TIRA Lab"></head>'
-        "<body><nav>Navigation noise</nav><article>Researchers describe a new AI model.</article>"
+        "<body><nav>Navigation noise</nav><aside>Author card and share links</aside>"
+        "<article><h1>Research note</h1><p>Researchers describe a new AI model.</p>"
+        "<p>The full article details its training data, evaluation, and limitations.</p>"
+        "<button>Copy link</button></article>"
         "<script>ignored()</script></body></html>"
     )
     with respx.mock:
@@ -220,9 +230,13 @@ def test_url_reader_extracts_only_bounded_public_html(monkeypatch: pytest.Monkey
         )
         article = asyncio.run(extract_url("https://public.example/article", settings))
     assert article.title == "Research note"
+    assert article.image_url == "https://public.example/images/research.jpg"
     assert article.author == "TIRA Lab"
     assert "Researchers describe a new AI model." in article.text
+    assert "training data, evaluation, and limitations" in article.text
     assert "Navigation noise" not in article.text
+    assert "Author card" not in article.text
+    assert "Copy link" not in article.text
 
 
 def test_url_reader_revalidates_redirect_destination(monkeypatch: pytest.MonkeyPatch) -> None:

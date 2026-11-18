@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -9,6 +10,7 @@ from bs4 import BeautifulSoup
 from app.core.config import Settings
 from app.core.security import validate_public_url
 
+logger = logging.getLogger(__name__)
 ALLOWED_CONTENT_TYPES = {"text/html", "text/plain", "application/xhtml+xml"}
 MAX_REDIRECTS = 3
 
@@ -25,6 +27,7 @@ class ExtractedArticle:
     source_name: str
     author: str | None
     published_at: datetime | None
+    image_url: str | None
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -44,7 +47,11 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 def _extract_document(url: str, content: bytes) -> ExtractedArticle:
     soup = BeautifulSoup(content, "html.parser")
-    for element in soup(["script", "style", "noscript", "svg", "nav", "footer", "header"]):
+    for element in soup(
+        ["script", "style", "noscript", "svg", "nav", "footer", "header", "aside", "form", "button"]
+    ):
+        element.decompose()
+    for element in soup.select('[role="navigation"]'):
         element.decompose()
     title_element = soup.find("meta", attrs={"property": "og:title"}) or soup.find("title")
     title = ""
@@ -53,7 +60,18 @@ def _extract_document(url: str, content: bytes) -> ExtractedArticle:
     if not title:
         title = (url.split("/")[-1] or "Untitled article")[:500]
 
-    text = soup.get_text(" ", strip=True)
+    content_root = soup.find("article") or soup.find("main") or soup.body or soup
+    image_element = (
+        soup.find("meta", attrs={"property": "og:image:secure_url"})
+        or soup.find("meta", attrs={"property": "og:image"})
+        or soup.find("meta", attrs={"name": "twitter:image"})
+    )
+    image_url = str(image_element.get("content", "")).strip() if image_element else ""
+    if not image_url:
+        image_element = content_root.find("img", src=True)
+        image_url = str(image_element.get("src", "")).strip() if image_element else ""
+    image_url = urljoin(url, image_url) if image_url else None
+    text = content_root.get_text(" ", strip=True)
     author_meta = soup.find("meta", attrs={"name": "author"})
     author = (
         str(author_meta.get("content")).strip()
@@ -75,6 +93,7 @@ def _extract_document(url: str, content: bytes) -> ExtractedArticle:
         source_name=urlsplit(url).hostname or "Unknown source",
         author=author[:255] if author else None,
         published_at=_parse_datetime(str(date_value) if date_value else None),
+        image_url=image_url,
     )
 
 
@@ -148,7 +167,29 @@ async def extract_url(url: str, settings: Settings) -> ExtractedArticle:
                             source_name=article.source_name,
                             author=article.author,
                             published_at=article.published_at,
+                            image_url=article.image_url,
                         )
+                    image_url = article.image_url
+                    if image_url and urlsplit(image_url).scheme != "https":
+                        logger.warning("Ignoring non-HTTPS article image")
+                        image_url = None
+                    if image_url:
+                        try:
+                            image_url = await validate_public_url(image_url)
+                        except ValueError as exc:
+                            logger.warning(
+                                "Ignoring unsafe article image URL (%s)", type(exc).__name__
+                            )
+                            image_url = None
+                    article = ExtractedArticle(
+                        url=article.url,
+                        title=article.title,
+                        text=article.text,
+                        source_name=article.source_name,
+                        author=article.author,
+                        published_at=article.published_at,
+                        image_url=image_url,
+                    )
                     return article
     except ArticleExtractionError:
         raise

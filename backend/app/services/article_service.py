@@ -46,14 +46,17 @@ async def analyze_and_persist(
     source_name: str | None = None,
     published_at: datetime | None = None,
     author: str | None = None,
+    image_url: str | None = None,
     retrieval_method: str = "MANUAL",
     registered_source_id: str | None = None,
 ) -> tuple[Article, Analysis, Draft, str]:
+    resolved_image_url = image_url
     if url and text is None:
         extracted = await extract_url(url, settings)
         canonical_url = extracted.url
         resolved_title = (title or extracted.title).strip()
         content = normalize_text(extracted.text, settings.max_article_chars)
+        resolved_image_url = extracted.image_url or resolved_image_url
         resolved_source_name = source_name or extracted.source_name
         source_domain_value = source_domain(canonical_url)
     else:
@@ -117,9 +120,7 @@ async def analyze_and_persist(
     score = build_score_breakdown(dimensions)
     body, format_type = build_draft(
         category=output.category,
-        headline=output.headline,
         summary=output.summary,
-        why_it_matters=output.why_it_matters,
         source_url=canonical_url,
         source_name=resolved_source_name,
     )
@@ -139,6 +140,7 @@ async def analyze_and_persist(
         source_domain=source_domain_value,
         author=author,
         published_at=published_at,
+        image_url=resolved_image_url,
         discovered_at=datetime.now(UTC),
         category=output.category.value,
         language=language.lower(),
@@ -240,6 +242,7 @@ def article_response(article: Article) -> ArticleResponse:
         source_domain=article.source_domain,
         author=article.author,
         published_at=article.published_at,
+        image_url=article.image_url,
         discovered_at=article.discovered_at,
         category=Category(article.category),
         language=article.language,

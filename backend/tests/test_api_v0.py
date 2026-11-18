@@ -52,6 +52,7 @@ def test_manual_analysis_persists_article_draft_and_audit() -> None:
         assert result["quality_status"] == "PASS"
         article_response = client.get(f"/api/v1/articles/{result['article_id']}")
         assert article_response.status_code == 200
+        assert article_response.json()["image_url"] is None
         assert article_response.json()["analysis"]["model_name"] == "deterministic-fallback"
         draft_response = client.get(f"/api/v1/articles/{result['article_id']}/draft")
         assert draft_response.status_code == 200

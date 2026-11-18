@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import httpx
 import respx
@@ -8,6 +9,7 @@ from app.core.config import Settings
 from app.database.models import (
     Article,
     ClaimEvidence,
+    Draft,
     PostCorrection,
     PublishedPost,
     ReviewDecision,
@@ -30,6 +32,7 @@ ARTICLE_TEXT = (
     "The announcement describes its training approach and benchmark results."
 )
 TELEGRAM_SEND = "https://api.telegram.org/bottest-telegram-token/sendMessage"
+TELEGRAM_PHOTO = "https://api.telegram.org/bottest-telegram-token/sendPhoto"
 TELEGRAM_ANSWER = "https://api.telegram.org/bottest-telegram-token/answerCallbackQuery"
 
 
@@ -119,6 +122,91 @@ def test_review_card_includes_opaque_actions_and_allowlisted_callback_approves()
         delivery = db.scalar(select(PublishedPost))
         assert delivery is not None
         assert delivery.delivery_status == "DELIVERED"
+
+
+def test_publish_sends_article_image_with_post_as_photo_caption() -> None:
+    client, factory = _client()
+    with client, respx.mock:
+        photo = respx.post(TELEGRAM_PHOTO).mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 51}})
+        )
+        text = respx.post(TELEGRAM_SEND).mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 52}})
+        )
+        analyzed = _analyze(client)
+        with factory() as db:
+            article = db.get(Article, analyzed["article_id"])
+            assert article is not None
+            article.image_url = "https://images.example/lead.jpg"
+            draft = db.get(Draft, analyzed["draft_id"])
+            assert draft is not None
+            expected_caption = draft.body
+            db.commit()
+        client.post(
+            f"/api/v1/drafts/{analyzed['draft_id']}/approve",
+            headers=ADMIN_HEADERS,
+            json={},
+        )
+
+        published = client.post(
+            f"/api/v1/drafts/{analyzed['draft_id']}/publish",
+            headers=ADMIN_HEADERS,
+        )
+
+    assert published.status_code == 200, published.text
+    payload = json.loads(photo.calls[0].request.content)
+    assert payload["photo"] == "https://images.example/lead.jpg"
+    assert payload["caption"] == expected_caption
+    assert text.call_count == 0
+
+
+def test_long_photo_post_replies_with_full_text_and_reuses_image_on_retry() -> None:
+    client, factory = _client()
+    with client, respx.mock:
+        photo = respx.post(TELEGRAM_PHOTO).mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 61}})
+        )
+        text = respx.post(TELEGRAM_SEND).mock(
+            side_effect=[
+                httpx.Response(503, json={"ok": False}),
+                httpx.Response(200, json={"ok": True, "result": {"message_id": 62}}),
+            ]
+        )
+        analyzed = _analyze(client)
+        long_body = "A detailed article summary. " * 50
+        with factory() as db:
+            article = db.get(Article, analyzed["article_id"])
+            assert article is not None
+            article.image_url = "https://images.example/lead.jpg"
+            draft = db.get(Draft, analyzed["draft_id"])
+            assert draft is not None
+            draft.body = long_body
+            db.commit()
+        client.post(
+            f"/api/v1/drafts/{analyzed['draft_id']}/approve",
+            headers=ADMIN_HEADERS,
+            json={},
+        )
+
+        failed = client.post(
+            f"/api/v1/drafts/{analyzed['draft_id']}/publish",
+            headers=ADMIN_HEADERS,
+        )
+        retried = client.post(
+            f"/api/v1/drafts/{analyzed['draft_id']}/publish",
+            headers=ADMIN_HEADERS,
+        )
+
+    assert failed.status_code == 502
+    assert retried.status_code == 200, retried.text
+    photo_payload = json.loads(photo.calls[0].request.content)
+    assert photo_payload["photo"] == "https://images.example/lead.jpg"
+    assert "caption" not in photo_payload
+    text_payload = json.loads(text.calls[0].request.content)
+    assert text_payload["text"] == long_body
+    assert text_payload["reply_parameters"] == {"message_id": 61}
+    assert text_payload["disable_web_page_preview"] is True
+    assert photo.call_count == 1
 
 
 def test_emergency_pause_blocks_publication_until_admin_resumes() -> None:
@@ -495,22 +583,47 @@ def test_allowlisted_telegram_admin_can_search_a_custom_topic(monkeypatch) -> No
         assert "Prepared a post for your request" in response_send.calls[0].request.content.decode()
 
 
-def test_science_draft_uses_fact_explainer_style_with_source() -> None:
+def test_science_draft_uses_full_article_summary_without_section_labels() -> None:
+    summary = (
+        "Did you know Google is exploring whether solar-powered satellites could support AI "
+        "computing in space? Project Suncatcher is testing the idea while investigating the "
+        "engineering challenges that must be solved."
+    )
     body, format_type = build_draft(
         category=Category.SCIENCE,
-        headline="Why astronauts age slightly differently in orbit",
-        summary="Relativity predicts that motion changes how quickly time passes.",
-        why_it_matters="The effect is measurable with precise clocks.",
+        summary=summary,
         source_url="https://science.example/time",
         source_name="Science Example",
     )
 
     assert format_type == "research"
-    assert "SCIENCE FACT" in body
-    assert "The science:" in body
-    assert "Why it matters:" in body
+    assert body.startswith(f"🔬 SCIENCE FACT\n\n{summary}\n\n")
+    assert summary in body
+    assert "The science:" not in body
+    assert "What happened:" not in body
+    assert "Why it matters:" not in body
+    assert "The project could change" not in body
     assert "https://science.example/time" in body
     assert "#ScienceFacts" in body
+
+
+def test_ai_draft_uses_narrative_article_summary_without_generic_sections() -> None:
+    summary = (
+        "Did you know Google is testing whether solar-powered satellites could run AI "
+        "computing workloads? Project Suncatcher is exploring that possibility and the "
+        "technical challenges that still need to be solved."
+    )
+    body, _ = build_draft(
+        category=Category.AI,
+        summary=summary,
+        source_url="https://ai.example/project",
+        source_name="AI Example",
+    )
+
+    assert body.startswith(f"🤖 AI UPDATE\n\n{summary}\n\n")
+    assert "Google explores AI computing in space" not in body
+    assert "What happened:" not in body
+    assert "Why it matters:" not in body
 
 
 def test_scheduled_collection_starts_with_telegram_review_configuration() -> None:

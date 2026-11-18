@@ -4,9 +4,7 @@ from app.api.schemas import Category
 def build_draft(
     *,
     category: Category,
-    headline: str,
     summary: str,
-    why_it_matters: str | None,
     source_url: str | None,
     source_name: str,
 ) -> tuple[str, str]:
@@ -16,43 +14,25 @@ def build_draft(
         else (f"Source: {source_name} (user-provided text; no source URL)")
     )
     if category == Category.CYBERSECURITY:
-        body = (
-            "🔐 CYBERSECURITY UPDATE\n\n"
-            f"{headline}\n\n"
-            f"What is known:\n{summary}\n\n"
-            f"Sources: {source_line}\n"
-            "#Cybersecurity #Security"
+        title, tags, format_type = (
+            "🔐 CYBERSECURITY UPDATE",
+            "#Cybersecurity #Security",
+            "cybersecurity",
         )
-        return body, "cybersecurity"
-    if category == Category.AI:
-        impact_section = f"\n\nWhy it matters:\n{why_it_matters}" if why_it_matters else ""
-        body = (
-            "🤖 AI UPDATE\n\n"
-            f"{headline}\n\n"
-            f"What happened:\n{summary}\n\n"
-            f"{impact_section.lstrip()}\n\n"
-            f"{source_line}\n"
-            "#AI #MachineLearning"
-        )
-        return body, "ai"
-    if category == Category.SCIENCE:
-        impact_section = f"Why it matters:\n{why_it_matters}\n\n" if why_it_matters else ""
-        body = (
-            "🔬 SCIENCE FACT\n\n"
-            f"{headline}\n\n"
-            f"The science:\n{summary}\n\n"
-            f"{impact_section}"
-            f"Source: {source_line}\n\n"
-            "#ScienceFacts #Physics #Space"
-        )
-        return body, "research"
-    if category == Category.EMERGING_TECH:
+    elif category == Category.AI:
+        title, tags, format_type = "🤖 AI UPDATE", "#AI #MachineLearning", "ai"
+    elif category == Category.SCIENCE:
+        title, tags, format_type = "🔬 SCIENCE FACT", "#ScienceFacts #Physics #Space", "research"
+    elif category == Category.EMERGING_TECH:
         title = "🚀 TECHNOLOGY UPDATE"
         tags = "#EmergingTechnology"
+        format_type = "technology"
     elif category == Category.SOFTWARE:
         title = "🧑‍💻 DEVELOPER UPDATE"
         tags = "#Software #OpenSource"
+        format_type = "technology"
     else:
         title = "📰 TECHNOLOGY UPDATE"
         tags = "#Technology"
-    return f"{title}\n\n{headline}\n\n{summary}\n\n{source_line}\n{tags}", "technology"
+        format_type = "technology"
+    return f"{title}\n\n{summary}\n\n{source_line}\n\n{tags}", format_type

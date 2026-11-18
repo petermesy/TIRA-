@@ -132,6 +132,20 @@ class AnalyzerService:
                 "exists. Do not invent details. For SCIENCE, create an engaging, plain-language",
                 "explainer for general readers. Keep every claim and number grounded in the",
                 "supplied content, label estimates as estimates, and retain important caveats.",
+                "Write the summary directly to the reader about the subject and its facts, not",
+                "about the article. Never say 'the article', 'the author', 'this post', or",
+                "'the source reports'. Do not repeat the source headline; it is not part of the",
+                "published post. For educational science, AI, and technology topics, start with",
+                "a natural, fact-led hook, preferably 'Did you know ...?' when it fits. For",
+                "urgent security news, lead with the actionable fact instead.",
+                "Summarize the full substantive article in 3 to 5 informative sentences as a",
+                "coherent narrative, covering its main developments, supporting details, results,",
+                "and caveats when present. Do not reduce the summary to the title or metadata.",
+                "Ignore webpage metadata and interface boilerplate such as navigation, author",
+                "cards, dates, social links, newsletter prompts, and browser messages. Do not",
+                "use section labels such as 'What happened' or 'Why it matters' in the summary.",
+                "If the supplied text lacks substantive article details, say so plainly instead",
+                "of presenting metadata as the article or inventing missing context.",
                 "Avoid clickbait and never imply a scientific effect is larger or more certain",
                 "than the source supports.",
             ]
@@ -143,8 +157,11 @@ class AnalyzerService:
             "article_content": text,
             "required_json_shape": {
                 "category": [category.value for category in Category],
-                "headline": "string",
-                "summary": "string grounded only in supplied content",
+                "headline": "short factual headline, not a copy of the source title",
+                "summary": (
+                    "reader-facing 3-5 sentence explanation of the subject and its facts, "
+                    "not a description of the article"
+                ),
                 "why_it_matters": "string grounded only in supplied content, or null",
                 "scores": {dimension: "number 0..10" for dimension in DIMENSIONS},
                 "rationale": {dimension: "string" for dimension in DIMENSIONS},

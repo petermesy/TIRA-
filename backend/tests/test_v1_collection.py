@@ -54,6 +54,7 @@ def _allow_mock_urls(monkeypatch: pytest.MonkeyPatch) -> None:
         return url
 
     monkeypatch.setattr("app.sources.connectors.http.validate_public_url", allow)
+    monkeypatch.setattr("app.sources.connectors.rss.validate_public_url", allow)
 
 
 def test_rss_connector_normalizes_items(
@@ -77,6 +78,7 @@ def test_rss_connector_normalizes_items(
     <rss><channel><title>Research Lab</title><item>
       <title>New AI research model release</title>
       <link>https://news.example/research?utm_source=feed</link>
+      <enclosure url="https://images.example/research.jpg" type="image/jpeg" />
       <description><![CDATA[The research team published a new AI model with detailed technical
       notes.]]></description>
       <pubDate>Mon, 02 Nov 2026 10:00:00 GMT</pubDate>
@@ -91,6 +93,7 @@ def test_rss_connector_normalizes_items(
     assert len(batch.items) == 1
     assert batch.items[0].source_name == "Research Lab"
     assert str(batch.items[0].url) == "https://news.example/research"
+    assert str(batch.items[0].image_url) == "https://images.example/research.jpg"
     assert batch.items[0].retrieval_method == "RSS"
 
 

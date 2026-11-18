@@ -29,6 +29,7 @@ class Article(Base):
     source_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     author: Mapped[str | None] = mapped_column(String(255), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    image_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     discovered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )

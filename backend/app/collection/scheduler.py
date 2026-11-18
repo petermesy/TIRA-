@@ -78,6 +78,8 @@ async def send_article_for_review(db: Session, article: Article, settings: Setti
         lines.append("Verification: NOT RUN")
     if article.canonical_url:
         lines.append(f"Source: {article.canonical_url}")
+    if article.image_url:
+        lines.append(f"Featured image: {article.image_url}")
     lines.extend(["", "POST PREVIEW:", draft.body, "", f"Draft ID: {draft.id}"])
     markup = {
         "inline_keyboard": [
